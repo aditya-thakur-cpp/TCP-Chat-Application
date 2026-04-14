@@ -1,111 +1,99 @@
-//initialize WinSock
-//create socket
-//connect to the server
-//send/recv
-//close the socket
+#include "common.h"
 
-#include<iostream>
-#include<winsock2.h>
-#include<ws2tcpip.h>
-#include<thread>
+atomic<bool> shouldExit(false);
 
-using namespace std;
-
-bool Initialize(){
-    WSADATA data;
-    return WSAStartup ( MAKEWORD(2,2), &data)==0;
-}
-
-void SendMsg(SOCKET s){
-    cout<<"Enter your chat name : "<<endl;
-    string name;
-
-    getline(cin, name);
+void SendMsg(SOCKET s, const string& name) {
     string message;
-
-    while(1){
+    while (!shouldExit) {
         getline(cin, message);
+
+        if (message == "quit") {
+            shouldExit = true;
+            cout << "Disconnecting..." << endl;
+            break;
+        }
+
         string msg = name + " : " + message;
-        int bytesent = send(s, msg.c_str(),msg.length(),0);
-        if(bytesent == SOCKET_ERROR){
-            cout<<"error sending message "<<endl;
+        if (!sendFramed(s, msg)) {
+            cerr << "Send failed. Error: " << WSAGetLastError() << endl;
+            shouldExit = true;
             break;
         }
-        if(message =="quit"){
-            cout<<"stopping the application "<<endl;
-            break;
-        }
-    }
-    closesocket(s);
-    WSACleanup();
-}
-
-void ReceiveMsg(SOCKET s){
-    while(1){
-        char buffer[4096];
-        int recvlength;
-        string msg= "";
-        recvlength = recv(s, buffer, sizeof(buffer),0);
-        if(recvlength <=0){
-            cout<<"disconnected from the server "<<endl;
-            break;
-        }
-        else{
-            msg = string(buffer, recvlength);
-            cout<<msg<<endl;
-        }
-
     }
 }
 
-int main(){
-    cout<<"Client program started "<<endl;
 
-    if(!Initialize()){
-        cout<<"Initialize winsock failed "<<endl;
+void ReceiveMsg(SOCKET s) {
+    string message;
+    while (!shouldExit) {
+        if (!recvFramed(s, message)) {
+            if (!shouldExit)
+                cout << "Disconnected from server." << endl;
+            shouldExit = true;
+            break;
+        }
+        cout << message << endl;
+    }
+}
 
+
+int main(int argc, char* argv[]) {
+    string serverIP = (argc > 1) ? argv[1] : "127.0.0.1";
+    int    port     = (argc > 2) ? stoi(argv[2]) : PORT;
+
+    cout << "Connecting to " << serverIP << ":" << port << " ..." << endl;
+
+    if (!Initialize()) {
+        cerr << "WinSock init failed. Error: " << WSAGetLastError() << endl;
         return 1;
     }
 
-    SOCKET s=socket(AF_INET, SOCK_STREAM, 0); 
-    if( s == INVALID_SOCKET){
-        cout<<"Invalid scoket created "<<endl;
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) {
+        cerr << "Socket creation failed. Error: " << WSAGetLastError() << endl;
+        WSACleanup();
         return 1;
-    }   
+    }
 
-    int port= 12345;
-    string serveraddress = "192.168.1.9";
     sockaddr_in serveraddr;
-    serveraddr.sin_family=AF_INET;
-    serveraddr.sin_port=htons(port);
-    inet_pton(AF_INET,serveraddress.c_str(), &(serveraddr.sin_addr));
-
-   
-
-    if(connect(s, reinterpret_cast<sockaddr*>(&serveraddr),sizeof(serveraddr))==SOCKET_ERROR){
-        cout<<"not able to connect to server "<<endl;
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_port   = htons(port);
+    if (inet_pton(AF_INET, serverIP.c_str(), &serveraddr.sin_addr) != 1) {
+        cerr << "Invalid server IP." << endl;
         closesocket(s);
         WSACleanup();
         return 1;
     }
 
-    cout<<"Successfully connected to server "<<endl;
+    if (connect(s, reinterpret_cast<sockaddr*>(&serveraddr), sizeof(serveraddr)) == SOCKET_ERROR) {
+        cerr << "Connection failed. Error: " << WSAGetLastError() << endl;
+        closesocket(s);
+        WSACleanup();
+        return 1;
+    }
 
-    thread senderthread(SendMsg , s);
-    thread receiver(ReceiveMsg , s);
-    senderthread.join();
-    receiver.join();
+    cout << "Connected! Enter your chat name: ";
+    string name;
+    getline(cin, name);
 
+    
+    if (!sendFramed(s, name)) {
+        cerr << "Failed to send name." << endl;
+        closesocket(s);
+        WSACleanup();
+        return 1;
+    }
 
-    // string message = "hello";
-    // int bytesent;
-    // if(bytesent=send(s,message.c_str(),message.length(),0)==SOCKET_ERROR){
-    //     cout<<"send failed"<<endl;
-    //     closesocket(s);
-    //     WSACleanup();
-    //     return 1;
-    // }
+    cout << "Welcome, " << name << "! Type 'quit' to exit." << endl;
 
-    // WSACleanup();
+    thread senderThread(SendMsg, s, name);
+    thread receiverThread(ReceiveMsg, s);
+
+    senderThread.join();
+    receiverThread.join();
+
+    
+    closesocket(s);
+    WSACleanup();
     return 0;
 }
